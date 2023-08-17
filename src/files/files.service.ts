@@ -71,8 +71,7 @@ export class FilesService {
     await page.goto(`file://${htmlPath}`, {
       waitUntil: 'networkidle0',
     });
-    const pdf = await page.pdf({ format: 'A4', path: pdfPath });
+    await page.pdf({ format: 'A4', path: pdfPath });
     await browser.close();
-    return pdf;
   }
 }
