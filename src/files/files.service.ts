@@ -1,49 +1,71 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import * as AdmZip from 'adm-zip';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import * as path from 'path';
 import * as puppeteer from 'puppeteer';
+import * as decompress from 'decompress';
+import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
+import { Logger } from 'winston';
+import { createErrorLog, createSuccessLog } from '../../utils/createLogs';
 
 @Injectable()
 export class FilesService {
+  constructor(
+    @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
+  ) {}
   async uploadAndConvert(file: Express.Multer.File) {
     if (!file) {
+      this.logger.error(createErrorLog('Получен пустой файл'));
       throw new BadRequestException('Файл не может быть пустым');
     }
 
     if (file.mimetype !== 'application/zip') {
+      this.logger.error(createErrorLog('Получен файл в некорректном формате'));
       throw new BadRequestException('Некорректный формат файла');
     }
 
-    if (file.buffer.length > 2 * 1024 * 1024 * 1024) {
+    if (file.size > 2 * 1024 * 1024 * 1024) {
+      this.logger.error(
+        createErrorLog('Получен файл размером больше, чем 2 Гб'),
+      );
       throw new BadRequestException(
         'Файл слишком большой. Его размер не должен привышать 2 Гб',
       );
     }
 
-    const namePrefix = Date.now();
-    const zipPath = path.join(
+    const startTime = performance.now();
+    const startMemory = process.memoryUsage();
+
+    const fileName = file.filename;
+    const zipPath = path.join(__dirname, `../../../uploads/zips/${fileName}`);
+    const destinationZipPath = path.join(
       __dirname,
-      `../../uploads/archives/archive-${namePrefix}`,
+      `../../../uploads/archives/archive-${fileName.split('.')[0]}`,
     );
-    const htmlPath = `${zipPath}/index.html`;
-    const pdfPath = path.join(
-      __dirname,
-      `../../uploads/pdfs/pdf-${namePrefix}.pdf`,
-    );
-    await this.extractZip(file.buffer, zipPath);
+    const htmlPath = `${destinationZipPath}/index.html`;
+    const pdfPath = `${destinationZipPath}/${fileName.split('.')[0]}.pdf`;
+    await this.extractZip(zipPath, destinationZipPath);
     await this.convertHtmlToPdf(htmlPath, pdfPath);
+
+    const endTime = performance.now();
+    const endMemory = process.memoryUsage();
+
+    const timeSpent = endTime - startTime;
+    const memoryUsed = endMemory.rss - startMemory.rss;
+
+    this.logger.info(
+      createSuccessLog(`${fileName.split('.')[0]}.pdf}`, timeSpent, memoryUsed),
+    );
+
     return pdfPath;
   }
 
-  async extractZip(zipData: Buffer, path: string) {
-    const zip = new AdmZip(zipData);
-    await zip.extractAllTo(path);
+  async extractZip(zipPath: string, destPath: string) {
+    await decompress(zipPath, destPath);
   }
 
   async convertHtmlToPdf(htmlPath: string, pdfPath: string) {
     const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--disable-dev-shm-usage'],
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
     const page = await browser.newPage();
     await page.goto(`file://${htmlPath}`, {
